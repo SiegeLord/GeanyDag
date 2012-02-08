@@ -9,10 +9,12 @@
 
 module geanydag;
 
-import tango.text.convert.Format;
+import tango.core.Array;
 import tango.io.Stdout;
-import tango.text.json.Json;
 import tango.io.device.File;
+import tango.text.Arguments;
+import tango.text.convert.Format;
+import tango.text.json.Json;
 
 alias Json!(char).Value Value;
 alias Json!(char).Composite Composite;
@@ -210,13 +212,15 @@ unittest
 	assert(arg_list == "(int delegate() a)", arg_list);
 }
 
-void MakeMemberTags(File fp, Value members_value, lazy const(char)[] current_scope, bool global = false)
+void AddConstructors(SArgs args, File fp, Value members_value, const(char)[] parent_scope, const(char)[] parent_name, const(char)[] template_args)
 {
 	if(members_value is null)
 		return;
 	
 	auto members = members_value.toArray();
 	if(members is null) Error;
+	
+	bool have_constructors = false;
 	
 	foreach(member_value; members)
 	{
@@ -227,6 +231,97 @@ void MakeMemberTags(File fp, Value members_value, lazy const(char)[] current_sco
 		
 		tag.Name = GetString(member, "name");
 		if(tag.Name is null) Error;
+		
+		if(tag.Name == "this")
+		{
+			bool skip_tag = false;
+			have_constructors = true;
+			
+			tag.Name = parent_name;
+			if(parent_scope != "")
+			{
+				tag.Scope = parent_scope[0..$-1];
+				tag.Attributes |= TMTagAttrType.tm_tag_attr_scope_t;
+			}
+			tag.Type |= TMTagType.tm_tag_macro_with_arg_t;
+			
+			auto composite_type = GetString(member, "type");
+			ParseFunctionType(composite_type, tag.VarType, tag.Arglist);
+			if(tag.Arglist !is null)
+				tag.Attributes |= TMTagAttrType.tm_tag_attr_arglist_t;
+			
+			tag.Arglist = template_args ~ tag.Arglist;
+		
+			switch(GetString(member, "protection"))
+			{
+				default:
+				case "public":
+					tag.Attributes |= TMTagAttrType.tm_tag_attr_access_t;
+					tag.Access = TagAccess.Public;
+					break;
+				case "protected":
+					tag.Attributes |= TMTagAttrType.tm_tag_attr_access_t;
+					tag.Access = TagAccess.Protected;
+					skip_tag = !args.AllowNonPublic;
+					break;
+				case "private":
+					tag.Attributes |= TMTagAttrType.tm_tag_attr_access_t;
+					tag.Access = TagAccess.Private;
+					skip_tag = !args.AllowNonPublic;
+					break;
+				case "package":
+					skip_tag = !args.AllowNonPublic;
+					break;
+			}
+			
+			if(!skip_tag)
+				WriteTag(fp, tag);
+		}
+	}
+	
+	if(!have_constructors)
+	{
+		TMTag tag;
+		tag.Name = parent_name;
+		tag.Arglist = template_args ~ "()";
+		tag.Access = TagAccess.Public;
+		tag.Type |= TMTagType.tm_tag_macro_with_arg_t;
+		tag.Attributes |= TMTagAttrType.tm_tag_attr_access_t | TMTagAttrType.tm_tag_attr_arglist_t;
+		
+		if(parent_scope != "")
+		{
+			tag.Scope = parent_scope[0..$-1];
+			tag.Attributes |= TMTagAttrType.tm_tag_attr_scope_t;
+		}
+		
+		WriteTag(fp, tag);
+	}
+}
+
+void MakeMemberTags(SArgs args, File fp, Value members_value, lazy const(char)[] current_scope, bool global = false, const(char)[] template_args = "")
+{
+	if(members_value is null)
+		return;
+	
+	auto members = members_value.toArray();
+	if(members is null) Error;
+	
+	foreach(member_value; members)
+	{
+		bool skip_tag = false;
+		bool is_single_template = false; // Template functions and template classes
+		bool is_template = false;
+		bool write_tag = true;
+		auto member = member_value.toObject();
+		if(member is null) Error;
+		
+		TMTag tag;
+		
+		tag.Name = GetString(member, "name");
+		if(tag.Name is null) Error;
+		
+		if(tag.Name == "this" || tag.Name == "~this")
+			continue;
 		
 		auto kind = GetString(member, "kind");
 		if(kind is null) Error;
@@ -250,9 +345,64 @@ void MakeMemberTags(File fp, Value members_value, lazy const(char)[] current_sco
 				
 				break;
 			case "class":
-				tag.Type |= TMTagType.tm_tag_class_t;
+				if(tag.Name.find('(') == tag.Name.length)
+				{
+					tag.Type |= TMTagType.tm_tag_class_t;
+					AddConstructors(args, fp, member.value("members"), current_scope, tag.Name, template_args);
+					write_tag = false;
+				}
+				else
+				{
+					goto case "template";
+				}
+				
+				break;
+			case "template":
+				is_template = true;
+				tag.Type |= TMTagType.tm_tag_macro_with_arg_t;
+				ParseFunctionType(tag.Name, tag.Name, tag.Arglist);
+				if(tag.Arglist !is null)
+					tag.Attributes |= TMTagAttrType.tm_tag_attr_arglist_t;
+				
+				auto arr = GetArray(member, "members");
+				if(arr is null) Error;
+				if(arr.length == 1)
+				{
+					auto sole_member = arr[0].toObject();
+					if(sole_member is null) Error;
+					auto sole_name = GetString(sole_member, "name");
+					if(sole_name == tag.Name)
+						is_single_template = true;
+				}
+				
+				break;
 			default:
 		}
+		
+		switch(GetString(member, "protection"))
+		{
+			default:
+			case "public":
+				tag.Attributes |= TMTagAttrType.tm_tag_attr_access_t;
+				tag.Access = TagAccess.Public;
+				break;
+			case "protected":
+				tag.Attributes |= TMTagAttrType.tm_tag_attr_access_t;
+				tag.Access = TagAccess.Protected;
+				skip_tag = !args.AllowNonPublic;
+				break;
+			case "private":
+				tag.Attributes |= TMTagAttrType.tm_tag_attr_access_t;
+				tag.Access = TagAccess.Private;
+				skip_tag = !args.AllowNonPublic;
+				break;
+			case "package":
+				skip_tag = !args.AllowNonPublic;
+				break;
+		}
+		
+		/* For templates */
+		tag.Arglist = template_args ~ tag.Arglist;
 		
 		if(current_scope != "")
 		{
@@ -260,27 +410,46 @@ void MakeMemberTags(File fp, Value members_value, lazy const(char)[] current_sco
 			tag.Attributes |= TMTagAttrType.tm_tag_attr_scope_t;
 		}
 		
-		WriteTag(fp, tag);
-		
-		MakeMemberTags(fp, member.value("members"), current_scope ~ tag.Name ~ ".");
+		if(!skip_tag)
+		{
+			if(is_single_template)
+			{
+				MakeMemberTags(args, fp, member.value("members"), current_scope, global, tag.Arglist);
+			}
+			else
+			{
+				if(write_tag)
+					WriteTag(fp, tag);
+				MakeMemberTags(args, fp, member.value("members"), current_scope ~ tag.Name ~ tag.Arglist ~ ".", is_template ? global : false);
+			}
+		}
 	}
+}
+
+struct SArgs
+{
+	bool AllowNonPublic = false;
 }
 
 void main(char[][] args)
 {
-	if(args.length < 3)
+	SArgs arg_struct;
+	
+	auto arguments = new Arguments;
+	arguments("private").aliased('p').bind({arg_struct.AllowNonPublic = true;});
+	if(!arguments.parse(args) || arguments(null).assigned.length < 2)
 	{
 		Stdout.formatln("Usage:\n {} input_filename.json output_filename.d.tags", args[0]);
 		return;
 	}
 	
 	auto json = new Json!(char);
-	json.parse(cast(char[])File.get(args[1]));
+	json.parse(cast(char[])File.get(arguments(null).assigned[1]));
 	auto root = json.value().toArray();
 	if(root is null)
 		Error;
 	
-	auto fp = new File(args[2], File.WriteCreate);
+	auto fp = new File(arguments(null).assigned[2], File.WriteCreate);
 	scope(exit) fp.close();
 	
 	fp.write("# format=tagmanager\n");
@@ -299,6 +468,6 @@ void main(char[][] args)
 			modul_name = modul_file[0..$-2];
 		}
 		
-		MakeMemberTags(fp, modul.value("members"), modul_name ~ ".", true);
+		MakeMemberTags(arg_struct, fp, modul.value("members"), modul_name ~ ".", true);
 	}
 }
