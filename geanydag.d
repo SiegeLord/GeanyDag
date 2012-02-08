@@ -210,7 +210,7 @@ unittest
 	assert(arg_list == "(int delegate() a)", arg_list);
 }
 
-void MakeMemberTags(File fp, Value members_value, lazy const(char)[] current_scope)
+void MakeMemberTags(File fp, Value members_value, lazy const(char)[] current_scope, bool global = false)
 {
 	if(members_value is null)
 		return;
@@ -233,7 +233,7 @@ void MakeMemberTags(File fp, Value members_value, lazy const(char)[] current_sco
 		switch(kind)
 		{
 			case "variable":
-				tag.Type |= current_scope == "" ? TMTagType.tm_tag_variable_t : TMTagType.tm_tag_member_t;
+				tag.Type |= global ? TMTagType.tm_tag_variable_t : TMTagType.tm_tag_member_t;
 				
 				tag.VarType = GetString(member, "type");
 				if(tag.VarType !is null)
@@ -241,7 +241,7 @@ void MakeMemberTags(File fp, Value members_value, lazy const(char)[] current_sco
 
 				break;
 			case "function":
-				tag.Type |= current_scope == "" ? TMTagType.tm_tag_function_t : TMTagType.tm_tag_method_t;
+				tag.Type |= global ? TMTagType.tm_tag_function_t : TMTagType.tm_tag_method_t;
 				
 				auto composite_type = GetString(member, "type");
 				ParseFunctionType(composite_type, tag.VarType, tag.Arglist);
@@ -299,6 +299,6 @@ void main(char[][] args)
 			modul_name = modul_file[0..$-2];
 		}
 		
-		MakeMemberTags(fp, modul.value("members"), modul_name ~ ".");
+		MakeMemberTags(fp, modul.value("members"), modul_name ~ ".", true);
 	}
 }
