@@ -344,10 +344,11 @@ void MakeMemberTags(SArgs args, File fp, Value members_value, lazy const(char)[]
 					tag.Attributes |= TMTagAttrType.tm_tag_attr_vartype_t | TMTagAttrType.tm_tag_attr_arglist_t;
 				
 				break;
+			case "struct":
 			case "class":
+			case "union":
 				if(tag.Name.find('(') == tag.Name.length)
 				{
-					tag.Type |= TMTagType.tm_tag_class_t;
 					AddConstructors(args, fp, member.value("members"), current_scope, tag.Name, template_args);
 					write_tag = false;
 				}
